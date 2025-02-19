@@ -1,6 +1,8 @@
 ros/collab_ws/build
 ros/collab_ws/install
 ros/collab_ws/log
+ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/FinalProject/APIKeys
 build/
 install/
 log/
+ros/collab_ws/recorded_audio.wav
