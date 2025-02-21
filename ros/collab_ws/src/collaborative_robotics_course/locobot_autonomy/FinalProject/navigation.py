@@ -68,7 +68,11 @@ class LocobotExample(Node):
         self.return_flag = False
 
         #Define the publishers
-        self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
+        # simulation
+        # self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
+        # Real robot
+        self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/mobile_base/cmd_vel", 1) #this is the topic we will publish to in order to move the base
+
         self.point_P_control_point_visual = self.create_publisher(Marker,"/locobot/mobile_base/control_point_P",1) #this can then be visualized in RVIZ (ros visualization)
         self.target_pose_visual = self.create_publisher(Marker,"/locobot/mobile_base/target_pose_visual",1)
         self.return_to_origin_pub = self.create_publisher(Bool,"ReturnOrigin",1)
@@ -78,7 +82,8 @@ class LocobotExample(Node):
         #using "/locobot/sim_ground_truth_pose" because "/odom" is from wheel commands in sim is unreliable
         self.odom_subscription = self.create_subscription(
             Odometry,
-            "/locobot/sim_ground_truth_pose",
+            # "/locobot/sim_ground_truth_pose",
+            "/locobot/mobile_base/odom",
             self.odom_mobile_base_callback,
             qos_profile=qos_profile_sensor_data  # Best effort QoS profile for sensor data [usual would be queue size: 1]
             ) #this says: listen to the odom message, of type odometry, and send that to the callback function specified
@@ -204,8 +209,8 @@ class LocobotExample(Node):
         err_y = self.target_pose.position.y - point_P.y
         error_vect = np.matrix([[err_x],[err_y]]) #this is a column vector (2x1); equivalently, we could use the transpose operator (.T): np.matrix([err_x ,err_y]).T 
 
-        Kp_mat = 1.0 * np.eye(2) # proportional gain matrix, diagonal with gain of 1.2 (for PID control)
-        Ki_mat = 0.2*np.eye(2)
+        Kp_mat = 0.5 * np.eye(2) # proportional gain matrix, diagonal with gain of 1.2 (for PID control)
+        # Ki_mat = 0.2*np.eye(2)
 
         #We will deal with this later (once we reached the position (x,y) goal), but we can calculate the angular error now - again this assumes there is only planar rotation about the z-axis, and the odom/baselink frames when aligned have x,y in the plane and z pointing upwards
         Rotation_mat = np.matrix([[R11,R12],[R21,R22]])
@@ -238,7 +243,7 @@ class LocobotExample(Node):
             self.integrated_error = self.integrated_error + err
 
         # PI controller
-        point_p_error_signal = Kp_mat*error_vect  + Ki_mat*self.integrated_error
+        point_p_error_signal = Kp_mat*error_vect  #+ Ki_mat*self.integrated_error
         #The following relates the desired motion of the point P and the commanded forward and angular velocity of the mobile base [v,w]
         non_holonomic_mat = np.matrix([[np.cos(current_angle), -self.L*np.sin(current_angle)],[np.sin(current_angle),self.L*np.cos(current_angle)]])
         #Now perform inversion to find the forward velocity and angular velcoity of the mobile base.
@@ -251,17 +256,19 @@ class LocobotExample(Node):
         # print("net err_magnitude",net_error_magnitude,"\n simple error err_magnitude",err_magnitude,"\n Error vector",error_vect,"\n integrated_error:",Ki_mat*self.integrated_error,"\n Control input",control_input)
    
         # now let's turn this into the message type and publish it to the robot:
-        control_msg = Twist()
-        control_msg.linear.x = float(control_input.item(0)) #extract these elements then cast them in float type
-        control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
+        if err_magnitude > self.goal_reached_error:
+            control_msg = Twist()
+            control_msg.linear.x = float(control_input.item(0)) #extract these elements then cast them in float type
+            control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
+            if np.linalg.norm(control_input) > 2:
+                control_msg.linear.x = control_msg.linear.x/np.linalg.norm(control_input)
+                control_msg.angular.z = control_msg.angular.z/np.linalg.norm(control_input)
+            
+            self.mobile_base_vel_publisher.publish(control_msg)
         #now publish the control output:
         
         # small little hack to make sure the control input is not too large (if it is, then normalize it)
-        if np.linalg.norm(control_input) > 2:
-            control_msg.linear.x = control_msg.linear.x/np.linalg.norm(control_input)
-            control_msg.angular.z = control_msg.angular.z/np.linalg.norm(control_input)
         
-        self.mobile_base_vel_publisher.publish(control_msg)
         # print out err magnitude for now.
         print("err magnitude",err_magnitude)
 
