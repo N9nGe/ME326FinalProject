@@ -12,7 +12,6 @@ The robot is first controlled to point B, then is instructed to return to point 
 read more about rospy publishers/subscribers here: https://docs.ros.org/en/galactic/Tutorials/Beginner-Client-Libraries/Writing-A-Simple-Py-Publisher-And-Subscriber.html
 '''
 
-
 import rclpy
 from rclpy.node import Node
 
@@ -22,6 +21,7 @@ from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker
+from std_msgs.msg import Bool
 
 #odom from gazebo is "best effort", so this is needed for the subscriber
 from rclpy.qos import qos_profile_sensor_data, QoSProfile 
@@ -39,38 +39,40 @@ class LocobotExample(Node):
     This script demonstrates how to move from A to B using proportional Control
     The pose of the Locobot is defined by its (x,y) position 
     """
-    def __init__(self,target_pose=None):
+    def __init__(self):
         """
         Input: Target_pose - ROS geometry_msgs.msg.Pose type
         To see what it looks like, put the following in the terminal: $ rosmsg show geometry_msgs/Pose
         """
-        super().__init__('move_A_to_B_py')
+        super().__init__('navigation')
 
-        self.current_target = "B" #points A and B, if A its the origin, if B it is the second specified point. This sript
+        # self.current_target = "B" #points A and B, if A its the origin, if B it is the second specified point. This sript
         self.target_pose_reached_bool = False
-        
 
         # Obtain or specify the goal pose (in sim, its between locobot/odom (world) and locobot/base_link (mobile base))
-        if type(target_pose) == type(None):
-            target_pose = Pose()
-            target_pose.position.x = 2.0
-            target_pose.position.y = 0.0
-            #specify the desired pose to be the same orientation as the origin
-            target_pose.orientation.x = 0.0
-            target_pose.orientation.y = 0.0
-            target_pose.orientation.z = 0.0
-            target_pose.orientation.w = 1.0 # cos(theta/2)
-            self.target_pose = target_pose
-        elif type(target_pose) != type(Pose()):
-            self.get_logger().info("Incorrect type for target pose, expects geometry_msgs Pose type") #send error msg if wrong type is send to go_to_pose
-        else:
-            self.target_pose = target_pose
+        # intialize the target pose at origin
+        # target pose is the point p pose
+        target_pose = Pose()
+        target_pose.position.x = 0.1
+        target_pose.position.y = 0.0
+        #specify the desired pose to be the same orientation as the origin
+        target_pose.orientation.x = 0.0
+        target_pose.orientation.y = 0.0
+        target_pose.orientation.z = 0.0
+        target_pose.orientation.w = 1.0 # cos(theta/2)
 
+        self.target_pose = target_pose
+        # add the orgin_pose to return back to origin
+        self.orgin_pose = target_pose
+
+        self.return_flag = False
 
         #Define the publishers
         self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
         self.point_P_control_point_visual = self.create_publisher(Marker,"/locobot/mobile_base/control_point_P",1) #this can then be visualized in RVIZ (ros visualization)
         self.target_pose_visual = self.create_publisher(Marker,"/locobot/mobile_base/target_pose_visual",1)
+        self.return_to_origin_pub = self.create_publisher(Bool,"ReturnOrigin",1)
+        self.target_pose_pub = self.create_publisher(Pose,"Target_pose",1)
 
         # use this if odometry message is reliable: 
         #using "/locobot/sim_ground_truth_pose" because "/odom" is from wheel commands in sim is unreliable
@@ -81,6 +83,21 @@ class LocobotExample(Node):
             qos_profile=qos_profile_sensor_data  # Best effort QoS profile for sensor data [usual would be queue size: 1]
             ) #this says: listen to the odom message, of type odometry, and send that to the callback function specified
         self.odom_subscription  # prevent unused variable warning
+
+        self.target_pose_subscription = self.create_subscription(
+            Pose,
+            "Target_pose",
+            self.target_pose_callback,
+            qos_profile=qos_profile_sensor_data
+        )
+
+        self.return_to_origin_subscription = self.create_subscription(
+            Bool,
+            "ReturnOrigin",
+            self.return_to_origin_callback,
+            qos_profile=qos_profile_sensor_data
+        )
+
 
 
         self.L = 0.1 #this is the distance of the point P (x,y) that will be controlled for position. The locobot base_link frame points forward in the positive x direction, the point P will be on the positive x-axis in the body-fixed frame of the robot mobile base
@@ -131,7 +148,6 @@ class LocobotExample(Node):
         marker.scale.y = 0.1 #arrow width
         marker.scale.z = 0.1 #arrow height
         
-
         # Set the marker pose
         marker.pose.position.x = self.target_pose.position.x  # center of the sphere in base_link frame
         marker.pose.position.y = self.target_pose.position.y
@@ -151,9 +167,7 @@ class LocobotExample(Node):
         self.target_pose_visual.publish(marker)
 
 
-
     def odom_mobile_base_callback(self, data):
-   
         # Step 1: Calculate the point P location (distance L on the x-axis), and publish the marker so it can be seen in Rviz
         # first determine the relative angle of the mobile base in the world xy-plane, this angle is needed to determine where to put the point P
         # the rotation will be about the world/body z-axis, so we will only need the qw, and qz quaternion components. We can then use knoweldge of the 
@@ -185,27 +199,25 @@ class LocobotExample(Node):
         self.pub_point_P_marker()
         self.pub_target_point_marker()
 
-
         # Step 2: Calculate the error between the target pose for position control (this will relate to the proportoinal gain matrix, the P in PID control)
         err_x = self.target_pose.position.x - point_P.x
         err_y = self.target_pose.position.y - point_P.y
-        error_vect = np.matrix([[err_x],[err_y]]) #this is a column vector (2x1); equivalently, we could use the transpose operator (.T): np.matrix([err_x ,err_y]).T  
+        error_vect = np.matrix([[err_x],[err_y]]) #this is a column vector (2x1); equivalently, we could use the transpose operator (.T): np.matrix([err_x ,err_y]).T 
 
-        Kp_mat = 1.2 * np.eye(2) # proportional gain matrix, diagonal with gain of 1.2 (for PID control)
+        Kp_mat = 1.0 * np.eye(2) # proportional gain matrix, diagonal with gain of 1.2 (for PID control)
         Ki_mat = 0.2*np.eye(2)
 
         #We will deal with this later (once we reached the position (x,y) goal), but we can calculate the angular error now - again this assumes there is only planar rotation about the z-axis, and the odom/baselink frames when aligned have x,y in the plane and z pointing upwards
         Rotation_mat = np.matrix([[R11,R12],[R21,R22]])
         R_det = np.linalg.det(Rotation_mat)
-        R_rounded = np.round(Rotation_mat,decimals=3)
+        R_rounded = np.round(Rotation_mat, decimals=3)
  
-        
         # This Angle is selected because its the frame rotation angle, how does Base appear from world?
         current_angle = np.arctan2(Rotation_mat[0,1],Rotation_mat[1,1]) #this is also the angle about the z-axis of the base
         # This is the angle error: how should frame Base move to go back to world frame?
         angle_error = current_angle #access the first row, second column to get angular error (skew sym matrix of the rotation axis - here only z component, then magnitude is angle error between the current pose and the world/odom pose which we will return to both at points A and B) 
         
-        Kp_angle_err = 0.2 #gain for angular error (here a scalar because we are only rotating about the z-axis)
+        Kp_angle_err = 2.0 #gain for angular error (here a scalar because we are only rotating about the z-axis)
 
         '''
         We do not do perform derivative control here because we are doing velocity control, 
@@ -225,14 +237,13 @@ class LocobotExample(Node):
         for err in self.integrated_error_list:
             self.integrated_error = self.integrated_error + err
 
-
-        point_p_error_signal = Kp_mat*error_vect # + Ki_mat*self.integrated_error
+        # PI controller
+        point_p_error_signal = Kp_mat*error_vect  + Ki_mat*self.integrated_error
         #The following relates the desired motion of the point P and the commanded forward and angular velocity of the mobile base [v,w]
         non_holonomic_mat = np.matrix([[np.cos(current_angle), -self.L*np.sin(current_angle)],[np.sin(current_angle),self.L*np.cos(current_angle)]])
         #Now perform inversion to find the forward velocity and angular velcoity of the mobile base.
         control_input = np.linalg.inv(non_holonomic_mat)*point_p_error_signal #note: this matrix can always be inverted because the angle is L
    
-
         #find the magnitude of the positional error to determine if its time to focus on orientation or switch targets
         err_magnitude = np.linalg.norm(error_vect)
         net_error_magnitude = np.linalg.norm(point_p_error_signal)
@@ -242,7 +253,7 @@ class LocobotExample(Node):
         # now let's turn this into the message type and publish it to the robot:
         control_msg = Twist()
         control_msg.linear.x = float(control_input.item(0)) #extract these elements then cast them in float type
-        control_msg.angular.z = float(control_input.item(1))
+        control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
         #now publish the control output:
         
         # small little hack to make sure the control input is not too large (if it is, then normalize it)
@@ -254,38 +265,57 @@ class LocobotExample(Node):
         # print out err magnitude for now.
         print("err magnitude",err_magnitude)
 
-        # Step 4: Finally, once point B has been reached, then return back to point A and vice versa      
         if err_magnitude < self.goal_reached_error:
-            #reset the integrated error: 
-            self.integrated_error_list = []
-            # switch targets so the locobot goes back and forth between points A and B
-            # print("reached TARGET! A current target:",self.current_target == 'A')
-            if self.current_target == 'A':
-                self.current_target = 'B'
-            else:
-                self.current_target = 'A'
+            if self.return_flag == True:
+                msg = Bool()
+                msg.data = False
+                self.return_flag = False
+                self.return_to_origin_pub.publish(msg)
+                self.get_logger().info("Returning to origin")
 
-        if self.current_target == 'A':
-            #if current target is A, then set it as the goal pose
-            self.target_pose.position.x = 2.0
-            self.target_pose.position.y = 1.0
+        # # Step 4: Finally, once point B has been reached, then return back to point A and vice versa      
+        # if err_magnitude < self.goal_reached_error:
+        #     #reset the integrated error: 
+        #     self.integrated_error_list = []
+        #     # switch targets so the locobot goes back and forth between points A and B
+        #     # print("reached TARGET! A current target:",self.current_target == 'A')
+        #     if self.current_target == 'A':
+        #         self.current_target = 'B'
+        #     else:
+        #         self.current_target = 'A'
+
+        # if self.current_target == 'A':
+        #     #if current target is A, then set it as the goal pose
+        #     self.target_pose.position.x = 2.0
+        #     self.target_pose.position.y = 1.0
             
-        if self.current_target == 'B':
-            self.target_pose.position.x = 0.0
-            self.target_pose.position.y = 0.0
+        # if self.current_target == 'B':
+        #     self.target_pose.position.x = 0.0
+        #     self.target_pose.position.y = 0.0
 
-        # print("target ",self.current_target)
-        # print("\n\n\n")
+        # # print("target ",self.current_target)
+        # # print("\n\n\n")
+
+    
+    def target_pose_callback(self, msg):
+        self.get_logger().info(f"Received target pose: {msg}")
+        self.integrated_error_list = []
+        self.target_pose = msg
+        
+    def return_to_origin_callback(self, msg):
+        self.get_logger().info(f"Received return to origin Flag: {msg}")
+        self.integrated_error_list = []
+        self.return_flag = msg.data
+        if self.return_flag == True:
+            self.target_pose_pub.publish(self.orgin_pose)
+            self.get_logger().info("Returning to origin")
 
 def main(args=None):
     rclpy.init(args=args)
 
     #instantiate the class
     cls_obj = LocobotExample() #instantiate object of the class (to call and use the functions)
-
     rclpy.spin(cls_obj)
-
-
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
