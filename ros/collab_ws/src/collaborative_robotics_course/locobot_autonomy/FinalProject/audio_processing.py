@@ -42,13 +42,13 @@ class AudioProcess(Node):
                        "Here is the voice transcript: ")
         
         self.item = ""
-        self.recording_status  = False
 
         self.audio_publisher = self.create_publisher(String, 'AudioItem', 10)
 
         self.modify_audio_subscriber = self.create_subscription(Bool, 'ModifyAudioStatus', self.modify_audio_callback, 10)
 
         self.timer_publish_audio = self.create_timer(1.0, self.audio_item_publisher)
+        self.modify_audio_pub = self.create_publisher(Bool, 'ModifyAudioStatus', 10)
         # self.timer_receive_audio = self.create_timer(1.0, self.audio_input_check_callback)
 
     def audio_item_publisher(self):
@@ -60,12 +60,12 @@ class AudioProcess(Node):
         self.get_logger().info(f"Received ModifyAudioStatus: {msg.data}")
         # edge detector
         if msg.data == True:
-            if self.recording_status == False:
-                self.recording_status = True
-                self.audio_process()
-                self.get_logger().info("Finish Recording")
-        else:
-            self.recording_status = False
+            self.audio_process()
+            self.get_logger().info("Finish Recording")
+
+            mdodify_audio_msg = Bool()
+            mdodify_audio_msg.data = False
+            self.modify_audio_pub.publish(mdodify_audio_msg)
 
     def audio_process(self):
         # 1. Record from microphone

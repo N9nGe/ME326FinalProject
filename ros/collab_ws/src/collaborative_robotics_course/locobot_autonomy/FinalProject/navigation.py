@@ -76,6 +76,7 @@ class LocobotExample(Node):
         self.target_pose_visual = self.create_publisher(Marker,"/locobot/mobile_base/target_pose_visual",1)
         self.return_to_origin_pub = self.create_publisher(Bool,"ReturnOrigin",1)
         self.target_pose_pub = self.create_publisher(Pose,"Target_pose",1)
+        self.modify_audio_pub = self.create_publisher(Bool, 'ModifyAudioStatus', 10)
 
         # use this if odometry message is reliable: 
         #using "/locobot/sim_ground_truth_pose" because "/odom" is from wheel commands in sim is unreliable
@@ -274,30 +275,10 @@ class LocobotExample(Node):
                 self.return_flag = False
                 self.return_to_origin_pub.publish(msg)
                 self.get_logger().info("Returning to origin")
-
-        # # Step 4: Finally, once point B has been reached, then return back to point A and vice versa      
-        # if err_magnitude < self.goal_reached_error:
-        #     #reset the integrated error: 
-        #     self.integrated_error_list = []
-        #     # switch targets so the locobot goes back and forth between points A and B
-        #     # print("reached TARGET! A current target:",self.current_target == 'A')
-        #     if self.current_target == 'A':
-        #         self.current_target = 'B'
-        #     else:
-        #         self.current_target = 'A'
-
-        # if self.current_target == 'A':
-        #     #if current target is A, then set it as the goal pose
-        #     self.target_pose.position.x = 2.0
-        #     self.target_pose.position.y = 1.0
-            
-        # if self.current_target == 'B':
-        #     self.target_pose.position.x = 0.0
-        #     self.target_pose.position.y = 0.0
-
-        # # print("target ",self.current_target)
-        # # print("\n\n\n")
-
+                
+                mdodify_audio_msg = Bool()
+                mdodify_audio_msg.data = True
+                self.modify_audio_pub.publish(mdodify_audio_msg)
     
     def target_pose_callback(self, msg):
         self.get_logger().info(f"Received target pose: {msg}")
