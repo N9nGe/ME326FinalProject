@@ -219,7 +219,7 @@ class LocobotExample(Node):
         # This Angle is selected because its the frame rotation angle, how does Base appear from world?
         current_angle = np.arctan2(Rotation_mat[0,1],Rotation_mat[1,1]) #this is also the angle about the z-axis of the base
         # This is the angle error: how should frame Base move to go back to world frame?
-        angle_error = current_angle #access the first row, second column to get angular error (skew sym matrix of the rotation axis - here only z component, then magnitude is angle error between the current pose and the world/odom pose which we will return to both at points A and B) 
+        angle_error = -current_angle #access the first row, second column to get angular error (skew sym matrix of the rotation axis - here only z component, then magnitude is angle error between the current pose and the world/odom pose which we will return to both at points A and B) 
         
         Kp_angle_err = 0.5 #gain for angular error (here a scalar because we are only rotating about the z-axis)
         angle_correction = Kp_angle_err*angle_error
