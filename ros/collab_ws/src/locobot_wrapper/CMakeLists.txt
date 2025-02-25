@@ -40,6 +40,7 @@ install(PROGRAMS
     scripts/arm_control_wrapper.py 
     scripts/base_control_wrapper.py 
     scripts/move_gripper_action_server.py 
+    scripts/arm_control_sequence.py
     DESTINATION lib/${PROJECT_NAME}
 )
 

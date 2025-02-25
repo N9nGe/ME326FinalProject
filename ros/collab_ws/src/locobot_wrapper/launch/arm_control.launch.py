@@ -37,6 +37,14 @@ def generate_launch_description():
         ),
         
         # Launch the Arm Control node
+        # Node(
+        #     package='locobot_wrapper',
+        #     executable='arm_control_sequence.py',
+        #     name='arm_control_sequence',
+        #     output='screen',
+        #     parameters=[{'use_sim': LaunchConfiguration('use_sim')}],
+        # ),
+
         Node(
             package='locobot_wrapper',
             executable='arm_control_wrapper.py',
