@@ -53,7 +53,7 @@ class LocobotExample(Node):
         # intialize the target pose at origin
         # target pose is the point p pose
         target_pose = Pose()
-        target_pose.position.x = 0.1
+        target_pose.position.x = 0.0
         target_pose.position.y = 0.0
         #specify the desired pose to be the same orientation as the origin
         target_pose.orientation.x = 0.0
@@ -68,9 +68,9 @@ class LocobotExample(Node):
 
         #Define the publishers
         # simulation
-        # self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
+        self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
         # Real robot
-        self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/mobile_base/cmd_vel", 1) #this is the topic we will publish to in order to move the base
+        # self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/mobile_base/cmd_vel", 1) #this is the topic we will publish to in order to move the base
 
         self.point_P_control_point_visual = self.create_publisher(Marker,"/locobot/mobile_base/control_point_P",1) #this can then be visualized in RVIZ (ros visualization)
         self.target_pose_visual = self.create_publisher(Marker,"/locobot/mobile_base/target_pose_visual",1)
@@ -81,8 +81,8 @@ class LocobotExample(Node):
         #using "/locobot/sim_ground_truth_pose" because "/odom" is from wheel commands in sim is unreliable
         self.odom_subscription = self.create_subscription(
             Odometry,
-            # "/locobot/sim_ground_truth_pose",
-            "/locobot/mobile_base/odom",
+            "/locobot/sim_ground_truth_pose",
+            # "/locobot/mobile_base/odom",
             self.odom_mobile_base_callback,
             qos_profile=qos_profile_sensor_data  # Best effort QoS profile for sensor data [usual would be queue size: 1]
             ) #this says: listen to the odom message, of type odometry, and send that to the callback function specified
@@ -102,11 +102,9 @@ class LocobotExample(Node):
             qos_profile=qos_profile_sensor_data
         )
 
-
-
         self.L = 0.1 #this is the distance of the point P (x,y) that will be controlled for position. The locobot base_link frame points forward in the positive x direction, the point P will be on the positive x-axis in the body-fixed frame of the robot mobile base
         #set targets for when a goal is reached: 
-        self.goal_reached_error = 0.05
+        self.goal_reached_error = 0.02
         self.integrated_error = np.matrix([[0],[0]]) #this is the integrated error for Proportional, Integral (PI) control
         # self.integrated_error_factor = 1.0 #multiply this by accumulated error, this is the Ki (integrated error) gain
         self.integrated_error_list = []
@@ -204,8 +202,8 @@ class LocobotExample(Node):
         self.pub_target_point_marker()
 
         # Step 2: Calculate the error between the target pose for position control (this will relate to the proportoinal gain matrix, the P in PID control)
-        err_x = self.target_pose.position.x - point_P.x
-        err_y = self.target_pose.position.y - point_P.y
+        err_x = self.target_pose.position.x - x_data
+        err_y = self.target_pose.position.y - y_data
         error_vect = np.matrix([[err_x],[err_y]]) #this is a column vector (2x1); equivalently, we could use the transpose operator (.T): np.matrix([err_x ,err_y]).T 
 
         Kp_mat = 0.5 * np.eye(2) # proportional gain matrix, diagonal with gain of 1.2 (for PID control)
@@ -221,7 +219,7 @@ class LocobotExample(Node):
         # This is the angle error: how should frame Base move to go back to world frame?
         angle_error = -current_angle #access the first row, second column to get angular error (skew sym matrix of the rotation axis - here only z component, then magnitude is angle error between the current pose and the world/odom pose which we will return to both at points A and B) 
         
-        Kp_angle_err = 0.5 #gain for angular error (here a scalar because we are only rotating about the z-axis)
+        Kp_angle_err = 1.5 #gain for angular error (here a scalar because we are only rotating about the z-axis)
         angle_correction = Kp_angle_err*angle_error
 
         '''
@@ -255,7 +253,10 @@ class LocobotExample(Node):
         # now let's turn this into the message type and publish it to the robot:
         control_msg = Twist()
         control_msg.linear.x = float(control_input.item(0)) #extract these elements then cast them in float type
-        control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
+        if np.abs(control_msg.linear.x) < 0.05:
+            control_msg.angular.z = angle_correction
+        else:
+            control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
         # if np.linalg.norm(control_input) > 2:
         #     control_msg.linear.x = control_msg.linear.x/np.linalg.norm(control_input)
         #     control_msg.angular.z = control_msg.angular.z/np.linalg.norm(control_input)
@@ -265,9 +266,6 @@ class LocobotExample(Node):
             control_msg.angular.z = 2.0*np.sign(control_msg.angular.z)
         
         self.mobile_base_vel_publisher.publish(control_msg)
-        
-        # print out err magnitude for now.
-        print("err magnitude",err_magnitude)
 
         if err_magnitude < self.goal_reached_error:
             if self.return_flag == True:
