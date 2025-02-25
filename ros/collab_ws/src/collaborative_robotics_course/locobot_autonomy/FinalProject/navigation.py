@@ -66,11 +66,13 @@ class LocobotExample(Node):
         self.orgin_pose = target_pose
         self.return_flag = False
 
+        self.modify_flag = False
+
         #Define the publishers
         # simulation
-        self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
+        # self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/diffdrive_controller/cmd_vel_unstamped", 1) #this is the topic we will publish to in order to move the base
         # Real robot
-        # self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/mobile_base/cmd_vel", 1) #this is the topic we will publish to in order to move the base
+        self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/mobile_base/cmd_vel", 1) #this is the topic we will publish to in order to move the base
 
         self.point_P_control_point_visual = self.create_publisher(Marker,"/locobot/mobile_base/control_point_P",1) #this can then be visualized in RVIZ (ros visualization)
         self.target_pose_visual = self.create_publisher(Marker,"/locobot/mobile_base/target_pose_visual",1)
@@ -82,8 +84,8 @@ class LocobotExample(Node):
         #using "/locobot/sim_ground_truth_pose" because "/odom" is from wheel commands in sim is unreliable
         self.odom_subscription = self.create_subscription(
             Odometry,
-            "/locobot/sim_ground_truth_pose",
-            # "/locobot/mobile_base/odom",
+            # "/locobot/sim_ground_truth_pose",
+            "/locobot/mobile_base/odom",
             self.odom_mobile_base_callback,
             qos_profile=qos_profile_sensor_data  # Best effort QoS profile for sensor data [usual would be queue size: 1]
             ) #this says: listen to the odom message, of type odometry, and send that to the callback function specified
@@ -220,7 +222,7 @@ class LocobotExample(Node):
         # This is the angle error: how should frame Base move to go back to world frame?
         angle_error = -current_angle #access the first row, second column to get angular error (skew sym matrix of the rotation axis - here only z component, then magnitude is angle error between the current pose and the world/odom pose which we will return to both at points A and B) 
         
-        Kp_angle_err = 1.5 #gain for angular error (here a scalar because we are only rotating about the z-axis)
+        Kp_angle_err = 0.5 #gain for angular error (here a scalar because we are only rotating about the z-axis)
         angle_correction = Kp_angle_err*angle_error
 
         '''
@@ -267,18 +269,23 @@ class LocobotExample(Node):
             control_msg.angular.z = 2.0*np.sign(control_msg.angular.z)
         
         self.mobile_base_vel_publisher.publish(control_msg)
-
+        print("error_mag", err_magnitude)
         if err_magnitude < self.goal_reached_error:
             if self.return_flag == True:
                 msg = Bool()
                 msg.data = False
                 self.return_flag = False
+                self.modify_flag = True
                 self.return_to_origin_pub.publish(msg)
                 self.get_logger().info("Returning to origin")
-                
-                mdodify_audio_msg = Bool()
-                mdodify_audio_msg.data = True
-                self.modify_audio_pub.publish(mdodify_audio_msg)
+            
+        if self.modify_flag == True:
+            if self.target_pose.position.x == self.orgin_pose.position.x and self.target_pose.position.y == self.orgin_pose.position.y:
+                if err_magnitude < self.goal_reached_error:
+                    self.modify_flag = False
+                    mdodify_audio_msg = Bool()
+                    mdodify_audio_msg.data = True
+                    self.modify_audio_pub.publish(mdodify_audio_msg)   
     
     def target_pose_callback(self, msg):
         self.get_logger().info(f"Received target pose: {msg}")
