@@ -64,7 +64,6 @@ class LocobotExample(Node):
         self.target_pose = target_pose
         # add the orgin_pose to return back to origin
         self.orgin_pose = target_pose
-
         self.return_flag = False
 
         #Define the publishers
@@ -222,7 +221,8 @@ class LocobotExample(Node):
         # This is the angle error: how should frame Base move to go back to world frame?
         angle_error = current_angle #access the first row, second column to get angular error (skew sym matrix of the rotation axis - here only z component, then magnitude is angle error between the current pose and the world/odom pose which we will return to both at points A and B) 
         
-        Kp_angle_err = 2.0 #gain for angular error (here a scalar because we are only rotating about the z-axis)
+        Kp_angle_err = 0.5 #gain for angular error (here a scalar because we are only rotating about the z-axis)
+        angle_correction = Kp_angle_err*angle_error
 
         '''
         We do not do perform derivative control here because we are doing velocity control, 
@@ -251,23 +251,20 @@ class LocobotExample(Node):
    
         #find the magnitude of the positional error to determine if its time to focus on orientation or switch targets
         err_magnitude = np.linalg.norm(error_vect)
-        net_error_magnitude = np.linalg.norm(point_p_error_signal)
-        # print("\n point P error signal:",point_p_error_signal,"\n non-hol-mat",non_holonomic_mat,"\n Current angle (deg):",current_angle*180/np.pi)
-        # print("net err_magnitude",net_error_magnitude,"\n simple error err_magnitude",err_magnitude,"\n Error vector",error_vect,"\n integrated_error:",Ki_mat*self.integrated_error,"\n Control input",control_input)
    
         # now let's turn this into the message type and publish it to the robot:
-        if err_magnitude > self.goal_reached_error:
-            control_msg = Twist()
-            control_msg.linear.x = float(control_input.item(0)) #extract these elements then cast them in float type
-            control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
-            if np.linalg.norm(control_input) > 2:
-                control_msg.linear.x = control_msg.linear.x/np.linalg.norm(control_input)
-                control_msg.angular.z = control_msg.angular.z/np.linalg.norm(control_input)
-            
-            self.mobile_base_vel_publisher.publish(control_msg)
-        #now publish the control output:
+        control_msg = Twist()
+        control_msg.linear.x = float(control_input.item(0)) #extract these elements then cast them in float type
+        control_msg.angular.z = float(control_input.item(1)) #this is the angular velocity of the mobile base
+        # if np.linalg.norm(control_input) > 2:
+        #     control_msg.linear.x = control_msg.linear.x/np.linalg.norm(control_input)
+        #     control_msg.angular.z = control_msg.angular.z/np.linalg.norm(control_input)
+        if np.abs(control_msg.linear.x) > 2.0:
+            control_msg.linear.x = 2.0*np.sign(control_msg.linear.x)
+        if np.abs(control_msg.angular.z) > 2.0:
+            control_msg.angular.z = 2.0*np.sign(control_msg.angular.z)
         
-        # small little hack to make sure the control input is not too large (if it is, then normalize it)
+        self.mobile_base_vel_publisher.publish(control_msg)
         
         # print out err magnitude for now.
         print("err magnitude",err_magnitude)
