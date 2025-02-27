@@ -49,6 +49,7 @@ install(PROGRAMS
   locobot_autonomy/move_locobot_base_action_server.py
   locobot_autonomy/vision_object_detector.py
   locobot_autonomy/camera.py
+  locobot_autonomy/align_depth_fncs.py
   FinalProject/audio_processing.py
   DESTINATION lib/${PROJECT_NAME}
 )
