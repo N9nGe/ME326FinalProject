@@ -69,33 +69,34 @@ class ArmWrapperNode(Node):
         lift_height = 0.2   # Height to lift after grasping
 
         # Step 1: Move above the target position (hover)
+        time.sleep(3.0)
         self.move_to_pose(target_x, target_y, target_z + hover_height)
         self.get_logger().info("Step 1: Moved above the target position (hover).")
-        time.sleep(8.0)
+        time.sleep(3.0)
         
 
         # Step 2: Open the gripper
         self.control_gripper(True)
         self.get_logger().info("Step 2: Gripper opened.")
-        time.sleep(8.0)
+        time.sleep(3.0)
         
 
         # Step 3: Move down to the target position
         self.move_to_pose(target_x, target_y, target_z)
         self.get_logger().info("Step 3: Moved to target position.")
-        time.sleep(8.0)
+        time.sleep(3.0)
         
 
         # Step 4: Close the gripper
         self.control_gripper(False)
         self.get_logger().info("Step 4: Gripper closed (object grasped).")
-        time.sleep(8.0)
+        time.sleep(3.0)
         
 
         # Step 5: Lift the object back to hover height
         self.move_to_pose(target_x, target_y, target_z + lift_height)
         self.get_logger().info("Step 5: Object lifted (hover position).")
-        time.sleep(8.0)
+        time.sleep(3.0)
         
 
 
@@ -190,3 +191,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
