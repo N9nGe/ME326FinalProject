@@ -55,11 +55,11 @@ class Camera(Node):
 
         self.subscription_audio = self.create_subscription( 
             String,
-            '/locobot/speech', # CHANGE THIS TO THE CORRECT TOPIC
+            'AudioItem', # CHANGE THIS TO THE CORRECT TOPIC
             self.audio_listener_callback, 10)
         self.subscription_audio  # prevent unused variable warning
 
-        self.publish_target = self.create_publisher(Float32MultiArray, '/locobot/move_base_simple/goal', 10) # CHANGE THIS TO THE CORRECT TOPIC
+        self.publish_target = self.create_publisher(Float32MultiArray, '/locobot/object_target', 10) # CHANGE THIS TO THE CORRECT TOPIC
         self.publish_target  # prevent unused variable warning
 
         self.detector = VisionObjectDetector()
@@ -127,7 +127,7 @@ class Camera(Node):
 
             # import pdb; pdb.set_trace()
                 
-            self.center_coordinates, vertices = self.detector.find_center_vertices(image_bytes, 'Banana') # REPLACE WITH OBJECT NAME
+            self.center_coordinates, vertices = self.detector.find_center_vertices(image_bytes, self.object) # REPLACE WITH OBJECT NAME
             self.get_logger().info(f"Center Coords: {self.center_coordinates}")
 
             if self.center_coordinates is not None:
@@ -165,12 +165,19 @@ class Camera(Node):
                 world_coords = self.pixel_to_world(center_rgb, depth_at_center)
                 self.get_logger().info(f"World Coords: {world_coords}")
 
-                # msg = Float32MultiArray()
-                # msg.data = np.array(world_coords)
-                # self.publish_target.publish(msg)
+                world_coords_base = self.camera_to_base_tf(self, world_coords)
+                self.get_logger().info(f"World Coords in Base Frame: {world_coords_base}")
+
+                msg = Float32MultiArray()
+                msg.data = np.array(world_coords_base)
+                self.publish_target.publish(msg)
                 
             except Exception as e:
                 self.get_logger().error(f"Failed to convert depth image: {str(e)}")
+        else:
+            msg = Float32MultiArray()
+            msg.data = None
+            self.publish_target.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
