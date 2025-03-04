@@ -50,6 +50,7 @@ install(PROGRAMS
   locobot_autonomy/vision_object_detector.py
   locobot_autonomy/camera.py
   FinalProject/audio_processing.py
+  FinalProject/navigation.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
