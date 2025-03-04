@@ -51,6 +51,7 @@ install(PROGRAMS
   locobot_autonomy/camera.py
   locobot_autonomy/align_depth_fncs.py
   FinalProject/audio_processing.py
+  FinalProject/navigation.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

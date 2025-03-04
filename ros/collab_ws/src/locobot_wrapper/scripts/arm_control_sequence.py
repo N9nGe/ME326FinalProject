@@ -9,12 +9,12 @@ from rclpy.action import ActionClient
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 from std_msgs.msg import Bool
-
+import time
 
 class ArmWrapperNode(Node):
     def __init__(self):
         super().__init__('arm_wrapper_node')
-         # Declare the parameter 'use_sim' with a default value of False
+        # Declare the parameter 'use_sim' with a default value of False
         self.declare_parameter('use_sim', False)
         
         # Get the parameter value
@@ -59,33 +59,90 @@ class ArmWrapperNode(Node):
     def pose_callback(self, msg):
         # Log the received PoseStamped message
         self.get_logger().info(f"Received Pose: {msg.pose.position.x}, {msg.pose.position.y}, {msg.pose.position.z}")
-        # Conditional behavior based on the 'use_sim' parameter
+        
+        # Extract the target pose
+        target_x = msg.pose.position.x
+        target_y = msg.pose.position.y
+        target_z = msg.pose.position.z
+
+        hover_height = 0.2  # Height above the object for hover
+        lift_height = 0.2   # Height to lift after grasping
+
+        # Step 1: Move above the target position (hover)
+        time.sleep(3.0)
+        self.move_to_pose(target_x, target_y, target_z + hover_height)
+        self.get_logger().info("Step 1: Moved above the target position (hover).")
+        time.sleep(3.0)
+        
+
+        # Step 2: Open the gripper
+        self.control_gripper(True)
+        self.get_logger().info("Step 2: Gripper opened.")
+        time.sleep(3.0)
+        
+
+        # Step 3: Move down to the target position
+        self.move_to_pose(target_x, target_y, target_z)
+        self.get_logger().info("Step 3: Moved to target position.")
+        time.sleep(3.0)
+        
+
+        # Step 4: Close the gripper
+        self.control_gripper(False)
+        self.get_logger().info("Step 4: Gripper closed (object grasped).")
+        time.sleep(3.0)
+        
+
+        # Step 5: Lift the object back to hover height
+        self.move_to_pose(target_x, target_y, target_z + lift_height)
+        self.get_logger().info("Step 5: Object lifted (hover position).")
+        time.sleep(3.0)
+        
+
+
+
+    def move_to_pose(self, x, y, z):
         if self.use_sim:
             # Simulated behavior
-            self.get_logger().info(f"Simulated behavior: Moving in simulation with Pose {msg.pose}")
-            r = R.from_quat([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
-            eul = r.as_euler('xyz', degrees=True)
+            self.get_logger().info(f"Simulated behavior: Moving in simulation to Pose ({x}, {y}, {z})")
             goal_msg = MoveArm.Goal()
-            goal_msg.pose = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z, eul[0], eul[1], eul[2]]
+            goal_msg.pose = [x, y, z, 0.0, 0.0, 0.0]  # Assuming no rotation for simplicity
 
             self.send_goal_future = self._action_client.send_goal_async(
                 goal_msg,
                 feedback_callback=self.feedback_callback
             )
             self.send_goal_future.add_done_callback(self.goal_response_callback)
-
         else:
             # Actual behavior
-            self.get_logger().info(f"Real behavior: Moving hardware with Pose {msg.pose}")
-            r = R.from_quat([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
-            rot_mat = r.as_matrix()
+            self.get_logger().info(f"Real behavior: Moving hardware to Pose ({x}, {y}, {z})")
             matrix = np.eye(4)
-            matrix[0:3, 0:3] = rot_mat
-            matrix[0,3] = msg.pose.position.x
-            matrix[1,3] = msg.pose.position.y
-            matrix[2,3] = msg.pose.position.z
 
-            self.locobot.arm.set_ee_pose_matrix(matrix,execute=True)
+            matrix[0, 3] = x
+            matrix[1, 3] = y
+            matrix[2, 3] = z
+
+            self.locobot.arm.set_ee_pose_matrix(matrix, execute=True)
+
+    def control_gripper(self, open_gripper):
+        if self.use_sim:
+            goal_msg = MoveGripper.Goal()
+            if open_gripper:
+                goal_msg.command = 'open'
+                goal_msg.duration = 3.0
+            else:
+                goal_msg.command = 'closed'
+                goal_msg.duration = 3.0
+            self.send_gripper_future = self.__gripper_client.send_goal_async(
+                goal_msg,
+                feedback_callback=self.feedback_callback
+            )
+            self.send_gripper_future.add_done_callback(self.gripper_response_callback)
+        else:
+            if open_gripper:
+                self.locobot.gripper.release()
+            else:
+                self.locobot.gripper.grasp()
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -101,29 +158,8 @@ class ArmWrapperNode(Node):
         result = future.result().result
     
     def feedback_callback(self, feedback_msg):
-        self.get_logger().info(f"Recieved feedback: {feedback_msg.feedback.progress}")
+        self.get_logger().info(f"Received feedback: {feedback_msg.feedback.progress}")
         
-    def gripper_callback(self, msg):
-        if self.use_sim:
-            goal_msg = MoveArm.Goal()
-            if msg.data:
-
-                goal_msg.command = 'open'
-                goal.duration = 3.0
-            else:
-                goal_msg.command = 'closed'
-                goal.duration = 3.0
-            self.send_gripper_future = self._gripper_client.send_goal_async(
-                goal_msg,
-                feedback_callback=self.feedback_callback
-            )
-            self._send_gripper_future.add_done_callback(self.gripper_response_callback)
-        else:
-            if msg.data:
-                self.locobot.gripper.release()
-            else:
-                self.locobot.gripper.grasp()
-
     def gripper_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
@@ -133,6 +169,13 @@ class ArmWrapperNode(Node):
         self.get_logger().info('Goal Accepted')
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def gripper_callback(self, msg: Bool):
+        # Log the gripper state request
+        self.get_logger().info(f"Received Gripper Command: {'Open' if msg.data else 'Close'}")
+        
+        # Control the gripper based on the received message
+        self.control_gripper(msg.data)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -148,3 +191,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
