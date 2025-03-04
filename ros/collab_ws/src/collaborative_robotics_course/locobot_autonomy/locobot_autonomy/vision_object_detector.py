@@ -19,8 +19,6 @@ class VisionObjectDetector:
         response = self.client.object_localization(image=image)
         objects = response.localized_object_annotations
 
-        print("objects:", objects)
-
         for obj in objects:
             if obj.name.lower() == object_name.lower():
                 vertices = obj.bounding_poly.normalized_vertices
@@ -30,6 +28,7 @@ class VisionObjectDetector:
                 # Convert normalized coordinates to pixels
                 image_pil = PILImage.open(io.BytesIO(image_bytes))
                 image_width, image_height = image_pil.size
+
                 return (int(x * image_width), int(y * image_height)), vertices
 
         return None, []  # Return safe default values if no object found
