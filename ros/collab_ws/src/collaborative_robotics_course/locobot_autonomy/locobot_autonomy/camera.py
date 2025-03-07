@@ -42,13 +42,13 @@ class Camera(Node):
 
         self.subscription = self.create_subscription(
             Image,
-            '/locobot/camera/color/image_raw',
+            '/locobot/camera/camera/color/image_raw',
             self.camera_listener_callback, 10)
         self.subscription  # prevent unused variable warning
 
         self.subscription_depth = self.create_subscription(
             Image,
-            '/locobot/camera/depth/image_rect_raw',
+            '/locobot/camera/camera/depth/image_rect_raw',
             self.depth_listener_callback, 10)
         self.subscription_depth  # prevent unused variable warning
 
@@ -83,17 +83,23 @@ class Camera(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time=self.buffer_length)
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-    def pixel_to_world(self, pixel_coords, depth):
-        xc = pixel_coords[0] * depth / self.rgb_K[1]
-        yc = pixel_coords[1] * depth / self.rgb_K[2]
-        return (xc, yc, depth)
+    def pixel_to_camera_frame(self, pixel_coords, depth):
+        fx, fy, cx, cy = self.rgb_K  # (fx, fy, cx, cy)
+        u, v = pixel_coords
+        
+        # standard pinhole model
+        X = (u - cx) * depth / fx
+        Y = (v - cy) * depth / fy
+        Z = depth
+
+        return (X, Y, Z)
     
     def camera_to_base_tf(self, camera_coords):
         try:
             # Check if both transforms are available
-            if self.tf_buffer.can_transform('locobot/arm_base_link', 'camera_color_frame', rclpy.time.Time()):
+            if self.tf_buffer.can_transform('locobot/arm_base_link', 'camera_color_optical_frame', rclpy.time.Time()):
                 # Get the transformation from camera to base
-                transform_camera_to_base = self.tf_buffer.lookup_transform('locobot/arm_base_link', 'camera_color_frame', rclpy.time.Time())
+                transform_camera_to_base = self.tf_buffer.lookup_transform('locobot/arm_base_link', 'camera_color_optical_frame', rclpy.time.Time())
 
                 tf_geom = transform_camera_to_base.transform
 
@@ -112,7 +118,7 @@ class Camera(Node):
                 
                 transformation_matrix = self.create_transformation_matrix(rot, trans)
                 camera_coords_homogenous = np.array([[camera_coords[0]], [camera_coords[1]], [camera_coords[2]], [1]])
-                world_coords_m = (transformation_matrix @ camera_coords_homogenous) / 1000
+                world_coords_m = (transformation_matrix @ camera_coords_homogenous)
                 self.get_logger().info(f'World Coordinates in meters: {world_coords_m}')
                 return world_coords_m
       
@@ -139,7 +145,7 @@ class Camera(Node):
 
             # import pdb; pdb.set_trace()
                 
-            self.center_coordinates, vertices = self.detector.find_center_vertices(image_bytes, "banana") # REPLACE WITH OBJECT NAME
+            self.center_coordinates, vertices = self.detector.find_center_vertices(image_bytes, "yellow banana") # REPLACE WITH OBJECT NAME
             # self.get_logger().info(f"Center Coords: {self.center_coordinates}")
 
             # if self.center_coordinates is not None:
@@ -167,11 +173,11 @@ class Camera(Node):
             try:
                 depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
                 aligned_depth = self.align_depth(depth, self.depth_K, self.rgb, self.rgb_K, self.cam2cam_transform)
-                depth_at_center = aligned_depth[self.center_coordinates[1], self.center_coordinates[0]]
-                center_rgb = list(self.center_coordinates)
-                center_rgb[0] = self.center_coordinates[0] - self.rgb_width/2
-                center_rgb[1] = self.center_coordinates[1] - self.rgb_height/2
-                world_coords = self.pixel_to_world(center_rgb, depth_at_center)
+                depth_at_center_mm = aligned_depth[self.center_coordinates[1], self.center_coordinates[0]]
+                depth_at_center_m = depth_at_center_mm / 1000
+                self.get_logger().info(f"depth_at_center raw = {depth_at_center_m}")  
+
+                world_coords = self.pixel_to_camera_frame(self.center_coordinates, depth_at_center_m)
                 world_coords_base = self.camera_to_base_tf(world_coords)
                 self.get_logger().info(f"World Coords in Base Frame: {world_coords_base}")
                 
