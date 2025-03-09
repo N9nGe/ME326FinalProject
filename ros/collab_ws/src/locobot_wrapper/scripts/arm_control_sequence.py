@@ -23,6 +23,8 @@ class ArmWrapperNode(Node):
         # Log the value of 'use_sim'
         self.get_logger().info(f"use_sim parameter set to: {self.use_sim}")
 
+        self.received_pose = False
+
         self.pose_subscriber = self.create_subscription(
             PoseStamped,
             '/arm_pose',  
@@ -58,6 +60,11 @@ class ArmWrapperNode(Node):
 
     def pose_callback(self, msg):
         # Log the received PoseStamped message
+
+        if self.received_pose:
+            return  # Ignore further messages
+
+        self.received_pose = True  # Set the flag to stop updates
         self.get_logger().info(f"Received Pose: {msg.pose.position.x}, {msg.pose.position.y}, {msg.pose.position.z}")
         
         # Extract the target pose
@@ -66,7 +73,7 @@ class ArmWrapperNode(Node):
         target_z = msg.pose.position.z
 
         hover_height = 0.1  # Height above the object for hover
-        lift_height = 0.1  # Height to lift after grasping
+        lift_height = 0.3  # Height to lift after grasping
 
         # Step 1: Move above the target position (hover)
         time.sleep(3.0)
@@ -82,7 +89,7 @@ class ArmWrapperNode(Node):
         
 
         # Step 3: Move down to the target position
-        self.move_to_pose(target_x, target_y, target_z)
+        self.move_to_pose(target_x , target_y, target_z - 0.05 )
         self.get_logger().info("Step 3: Moved to target position.")
         time.sleep(3.0)
         
@@ -94,14 +101,14 @@ class ArmWrapperNode(Node):
         
 
         # Step 5: Lift the object back to hover height
-        self.move_to_pose(target_x, target_y, target_z + lift_height)
+        self.move_to_pose(target_x - 0.3, 0, target_z + lift_height)
         self.get_logger().info("Step 5: Object lifted (hover position).")
         time.sleep(3.0)
         
 
 
 
-    def move_to_pose(self, x, y, z):
+    def move_to_pose(self, x, y, z, roll=0.0, pitch=np.pi/2, yaw=0.0):
         if self.use_sim:
             # Simulated behavior
             self.get_logger().info(f"Simulated behavior: Moving in simulation to Pose ({x}, {y}, {z})")
@@ -116,8 +123,13 @@ class ArmWrapperNode(Node):
         else:
             # Actual behavior
             self.get_logger().info(f"Real behavior: Moving hardware to Pose ({x}, {y}, {z})")
-            matrix = np.eye(4)
 
+            # Convert roll, pitch, yaw to a rotation matrix
+            r = R.from_euler('xyz', [roll, pitch, yaw], degrees=False)
+            rotation_matrix = r.as_matrix()
+
+            matrix = np.eye(4)
+            matrix[:3, :3] = rotation_matrix  # Set rotation
             matrix[0, 3] = x
             matrix[1, 3] = y
             matrix[2, 3] = z
