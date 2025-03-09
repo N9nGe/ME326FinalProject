@@ -7,3 +7,6 @@ install/
 log/
 ros/collab_ws/recorded_audio.wav
 ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/locobot_autonomy/me326-hw2-02b887b1a25c.json
+ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/locobot_autonomy/yolo11s.pt
+ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/locobot_autonomy/yolov8n.pt
+

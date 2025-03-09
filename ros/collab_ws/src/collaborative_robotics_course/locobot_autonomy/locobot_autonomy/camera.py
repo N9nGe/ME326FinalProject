@@ -12,12 +12,11 @@ from typing import Tuple
 from scipy.spatial.transform import Rotation as R
 
 import cv2
-
 import os
 import numpy as np
-from vision_object_detector import VisionObjectDetector
 import io
 from PIL import Image as PILImage
+from ultralytics import YOLO
 
 import geometry_msgs
 from geometry_msgs.msg import Pose
@@ -29,101 +28,59 @@ from nav_msgs.msg import Odometry
 import tf2_ros
 from rclpy.duration import Duration
 
-json_key_path = "/home/locobot/Naixiang/ME326FinalProject/ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/locobot_autonomy/me326-hw2-02b887b1a25c.json"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = json_key_path                                   
-
 class Camera(Node):
     def __init__(self):
         super().__init__('rohan')
         self.bridge = CvBridge()
 
-        # Set QoS to Reliable, matching most camera publishers
-        # qos_profile = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
-
         self.subscription = self.create_subscription(
             Image,
             '/locobot/camera/camera/color/image_raw',
-            self.camera_listener_callback, 10)
+            self.camera_listener_callback,
+            10)
         self.subscription  # prevent unused variable warning
 
         self.subscription_depth = self.create_subscription(
             Image,
             '/locobot/camera/camera/depth/image_rect_raw',
-            self.depth_listener_callback, 10)
+            self.depth_listener_callback,
+            10)
         self.subscription_depth  # prevent unused variable warning
 
-        self.subscription_audio = self.create_subscription( 
+        self.subscription_audio = self.create_subscription(
             String,
-            'AudioItem', # CHANGE THIS TO THE CORRECT TOPIC
-            self.audio_listener_callback, 10)
+            'AudioItem',  # CHANGE THIS TO THE CORRECT TOPIC
+            self.audio_listener_callback,
+            10)
         self.subscription_audio  # prevent unused variable warning
 
-        self.publish_target = self.create_publisher(PoseStamped, '/arm_pose', 10) # CHANGE THIS TO THE CORRECT TOPIC
+        self.publish_target = self.create_publisher(
+            PoseStamped,
+            '/arm_pose',  # CHANGE THIS TO THE CORRECT TOPIC
+            10)
         self.publish_target  # prevent unused variable warning
 
-        self.detector = VisionObjectDetector()
-
+        # Intrinsics for RGB and Depth cameras
         self.rgb_K = (609.03759765625, 609.2069091796875, 323.6105041503906, 243.78759765625)
         self.depth_K = (379.8849792480469, 379.8849792480469, 320.3520202636719, 379.8849792480469)
-        self.cam2cam_transform = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
 
-        self.center_coordinates = None
+        # Identity transform between cameras (fill in if needed)
+        self.cam2cam_transform = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+
+        self.center_coordinates = None  # Will store best banana center
         self.object = None
         self.rgb = None
         self.rgb_width = 640
         self.rgb_height = 480
 
-        # PUBLISHER FOR MOBILE BASE
-        # self.mobile_base_vel_publisher = self.create_publisher(Twist,"/locobot/mobile_base/cmd_vel", 1)
-        # msg = Twist()
-        # msg.angular.z = 0.5  # Set angular velocity (turn)
-        # self.mobile_base_vel_publisher.publish(msg)
-
         self.buffer_length = Duration(seconds=5, nanoseconds=0)
         self.tf_buffer = tf2_ros.Buffer(cache_time=self.buffer_length)
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
-    def pixel_to_camera_frame(self, pixel_coords, depth):
-        fx, fy, cx, cy = self.rgb_K  # (fx, fy, cx, cy)
-        u, v = pixel_coords
-        
-        # standard pinhole model
-        X = (u - cx) * depth / fx
-        Y = (v - cy) * depth / fy
-        Z = depth
-
-        return (X, Y, Z)
-    
-    def camera_to_base_tf(self, camera_coords):
-        try:
-            # Check if both transforms are available
-            if self.tf_buffer.can_transform('locobot/arm_base_link', 'camera_color_optical_frame', rclpy.time.Time()):
-                # Get the transformation from camera to base
-                transform_camera_to_base = self.tf_buffer.lookup_transform('locobot/arm_base_link', 'camera_color_optical_frame', rclpy.time.Time())
-
-                tf_geom = transform_camera_to_base.transform
-
-                # Get translation
-                trans = np.array([tf_geom.translation.x,
-                                tf_geom.translation.y,
-                                tf_geom.translation.z],
-                                dtype=float)
-
-                # Get rotation quaternion [x, y, z, w]
-                rot = np.array([tf_geom.rotation.x,
-                                tf_geom.rotation.y,
-                                tf_geom.rotation.z,
-                                tf_geom.rotation.w],
-                            dtype=float)
-                
-                transformation_matrix = self.create_transformation_matrix(rot, trans)
-                camera_coords_homogenous = np.array([[camera_coords[0]], [camera_coords[1]], [camera_coords[2]], [1]])
-                world_coords_m = (transformation_matrix @ camera_coords_homogenous)
-                self.get_logger().info(f'World Coordinates in meters: {world_coords_m}')
-                return world_coords_m
-      
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
-            self.get_logger().error(f"Failed to convert depth image: {str(e)}")
 
     def audio_listener_callback(self, msg):
         self.object = msg.data
@@ -131,202 +88,311 @@ class Camera(Node):
     def camera_listener_callback(self, msg):
         self.get_logger().info('Received an image')
 
-        # if self.saved_image is False:
-
         if msg is None:
             self.get_logger().error("Received an empty image message!")
             return
 
         try:
+            # Convert ROS image to OpenCV format (BGR by default)
             cv_ColorImage = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-            # self.get_logger().info(f'cv_COLORIMAGE SHAPE {cv_ColorImage.shape}')
-            success, encoded_image = cv2.imencode('.jpg', cv_ColorImage)
-            image_bytes = encoded_image.tobytes()
+            cv_ColorImage_rgb = cv2.cvtColor(cv_ColorImage, cv2.COLOR_BGR2RGB)
 
-            # import pdb; pdb.set_trace()
-                
-            self.center_coordinates, vertices = self.detector.find_center_vertices(image_bytes, "yellow banana") # REPLACE WITH OBJECT NAME
-            # self.get_logger().info(f"Center Coords: {self.center_coordinates}")
+            # 1) Run YOLO on the frame, get annotated images & banana center
+            all_detections_frame, banana_frame, banana_center = self.run_yolo_and_get_images(
+                cv_ColorImage_rgb,
+                model_path="yolo11x.pt"  # or your custom YOLO weights
+            )
 
-            # if self.center_coordinates is not None:
-            #     msg = Twist()
+            # 2) Save the "all detections" image always
+            cv2.imwrite("camera_detections.jpg", all_detections_frame)
+            self.get_logger().info("Saved all detections to camera_detections.jpg")
+
+            # 3) If a banana was found, save the banana-only image
+            self.center_coordinates = banana_center
+            if banana_center != (None, None) and banana_frame is not None:
+                cv2.imwrite("banana_detection.jpg", banana_frame)
+                self.get_logger().info("Banana found! Saved banana-only image to banana_detection.jpg")
+            else:
+                self.get_logger().info("No banana detected in the current frame.")
+
+            # Keep the latest RGB frame for depth alignment
             self.rgb = cv_ColorImage
-                # self.mobile_base_vel_publisher.publish(msg) # PUBLISH TO MOBILE BASE
-
-            annotated_frame = self.detector.annotate_image(vertices, cv_ColorImage)
-            # self.get_logger().info(f"annotated_frame: {annotated_frame}")
-            # annotated_frame_np = cv2.cvtColor(np.array(annotated_frame), cv2.COLOR_RGB2BGR)
-            
-            # cv2.imwrite("/home/locobot/team_chinese_rohan_ws/ME326FinalProject/ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/locobot_autonomy/annotated_fruit.jpg", annotated_frame)
-            self.saved_image = True
-
-                # print("Center in pixel coordinates: ", center_coordinates)
-
-                # cv2.imshow('Camera Stream', annotated_frame_np)
-                # cv2.waitKey(1)
 
         except Exception as e:
-            self.get_logger().error(f"Failed to convert RGB image: {str(e)}")
+            self.get_logger().error(f"Failed to process RGB image: {str(e)}")
 
     def depth_listener_callback(self, msg):
-
-            try:
-                depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-                aligned_depth = self.align_depth(depth, self.depth_K, self.rgb, self.rgb_K, self.cam2cam_transform)
-                depth_at_center_mm = aligned_depth[self.center_coordinates[1], self.center_coordinates[0]]
-                depth_at_center_m = depth_at_center_mm / 1000
-                self.get_logger().info(f"depth_at_center raw = {depth_at_center_m}")  
-
-                world_coords = self.pixel_to_camera_frame(self.center_coordinates, depth_at_center_m)
-                world_coords_base = self.camera_to_base_tf(world_coords)
-                self.get_logger().info(f"World Coords in Base Frame: {world_coords_base}")
-                
-
-                msg = PoseStamped()
-
-                msg.header.stamp.sec = 1710000000  # Replace with actual time or use a Clock
-                msg.header.stamp.nanosec = 0
-                msg.header.frame_id = "map"
-
-                msg.pose.position.x = float(world_coords_base[0])
-                msg.pose.position.y = float(world_coords_base[1])
-                msg.pose.position.z = float(world_coords_base[2])
-
-                msg.pose.orientation.x = 0.0
-                msg.pose.orientation.y = 0.0
-                msg.pose.orientation.z = 0.0
-                msg.pose.orientation.w = 1.0
-
-                self.publish_target.publish(msg)
-                
-            except Exception as e:
-                self.get_logger().error(f"Failed to convert depth image: {str(e)}")
-
-    def convert_intrinsics(self, img, K_old, K_new, new_size=(1280, 720)):
         """
-        Convert a set of images to a different set of camera intrinsics.
-        Parameters:
-        - images: List of input images.
-        - K_old: Matrix of the old camera intrinsics.
-        - K_new: Matrix of the new camera intrinsics.
-        - new_size: Tuple (width, height) defining the size of the output images.
-        Returns:
-        - List of images converted to the new camera intrinsics.
+        When a new depth image arrives, if we have a valid banana center from YOLO,
+        we align depth to the color frame, read the depth at that pixel, and compute
+        the 3D coords in the base frame. Finally, publish a PoseStamped.
         """
-        width, height = new_size
-        # self.get_logger().info("in convert intrinsics")
-        # Compute the inverse of the new intrinsics matrix for remapping
-        K_new_inv = np.linalg.inv(K_new)
-        # self.get_logger().info(f"K_new_inv: ")
-        # Construct a grid of points representing the new image coordinates
-        x, y = np.meshgrid(np.arange(width), np.arange(height))
-        homogenous_coords = np.stack([x.ravel(), y.ravel(), np.ones_like(x).ravel()], axis=-1).T
-        # self.get_logger().info("homogenous_coords: ", homogenous_coords)
-        # Convert to the old image coordinates
-        old_coords = K_old @ K_new_inv @ homogenous_coords
-        old_coords /= old_coords[2, :]  # Normalize to make homogeneous
-        # self.get_logger.info("old coords: ", old_coords)
-        # Reshape for remapping
-        map_x = old_coords[0, :].reshape(height, width).astype(np.float32)
-        map_y = old_coords[1, :].reshape(height, width).astype(np.float32)
-        
-        # Remap the image to the new intrinsics
-        converted_img = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR)
-        return converted_img
+        if self.center_coordinates is None or self.center_coordinates == (None, None) or self.rgb is None:
+            # No valid banana center or no recent RGB
+            return
 
-    def warp_image(self, image, K, R, t):
+        try:
+            depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            aligned_depth = self.align_depth(depth, self.depth_K, self.rgb, self.rgb_K, self.cam2cam_transform)
+
+            # Depth is in millimeters at banana pixel
+            x_pix, y_pix = self.center_coordinates
+            depth_at_center_mm = aligned_depth[y_pix, x_pix]
+            depth_at_center_m = depth_at_center_mm / 1000.0
+            self.get_logger().info(f"Depth at banana center = {depth_at_center_m:.3f} m")
+
+            # Convert pixel coords + depth to camera coordinates
+            camera_coords = self.pixel_to_camera_frame(self.center_coordinates, depth_at_center_m)
+            # Transform camera coords to the robot base frame
+            base_coords = self.camera_to_base_tf(camera_coords)
+            self.get_logger().info(f"Banana in base frame: {base_coords}")
+
+            if base_coords is not None:
+                # Publish as a PoseStamped
+                pose_msg = PoseStamped()
+                pose_msg.header.stamp = self.get_clock().now().to_msg()
+                pose_msg.header.frame_id = "map"  # or "locobot/arm_base_link", etc.
+
+                # base_coords is shape (4,1) => [x, y, z, 1]
+                pose_msg.pose.position.x = float(base_coords[0])
+                pose_msg.pose.position.y = float(base_coords[1])
+                pose_msg.pose.position.z = float(base_coords[2])
+                pose_msg.pose.orientation.x = 0.0
+                pose_msg.pose.orientation.y = 0.0
+                pose_msg.pose.orientation.z = 0.0
+                pose_msg.pose.orientation.w = 1.0
+
+                self.publish_target.publish(pose_msg)
+
+        except Exception as e:
+            self.get_logger().error(f"Failed to process depth image: {str(e)}")
+
+    # ---------------------------------------------------------------------
+    #  YOLO Inference + Creating Two Annotated Images
+    # ---------------------------------------------------------------------
+    def run_yolo_and_get_images(self, frame: np.ndarray, model_path: str = "yolov8n.pt"):
         """
-        Warp an image from the perspective of camera 1 to camera 2.
+        Runs YOLO on the given frame and creates two images:
+         1) 'all_detections_frame': bounding boxes for *all* detections (any class).
+         2) 'banana_frame': bounding boxes only for banana(s), if any. If no banana, None.
 
-        :param image: Input image from camera 1
-        :param K: Intrinsic matrix of both cameras
-        :param R: Rotation matrix from camera 1 to camera 2
-        :param t: Translation vector from camera 1 to camera 2
-        :return: Warped image as seen from camera 2
+        Returns (all_detections_frame, banana_frame, banana_center).
+          - all_detections_frame: annotated with every detection
+          - banana_frame: annotated only with banana detection(s), or None if no bananas
+          - banana_center: (x_center, y_center) of the highest-confidence banana,
+                           or (None, None) if no banana
+
+        The user can then save these images as separate files.
         """
-        # Compute the homography matrix
-        H = self.compute_homography(K, R, t)
+        model = YOLO(model_path)
+        results = model.predict(frame)
+        detections = results[0]  # Single image => single Results
 
-        # Warp the image using the homography
-        height, width = image.shape[:2]
-        warped_image = cv2.warpPerspective(image, H, (width, height))
+        # We'll annotate on separate copies to keep logic simple
+        all_detections_frame = frame.copy()
+        banana_frame = None
 
-        return warped_image
+        best_banana_conf = 0.0
+        banana_center = (None, None)
 
+        # We'll track *all* banana boxes so we can create a banana-only image if needed
+        banana_boxes = []
 
-    def compute_homography(self, K, R, t):
+        # 1) Annotate all detections on 'all_detections_frame'
+        for box in detections.boxes:
+            cls_id = int(box.cls[0].item())
+            conf = float(box.conf[0].item())
+            class_name = detections.names[cls_id]
+
+            # Coordinates
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+
+            # Draw rectangle for this detection
+            cv2.rectangle(
+                all_detections_frame,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),  # color
+                2             # thickness
+            )
+            # Label text
+            label = f"{class_name} {conf:.2f}"
+            cv2.putText(
+                all_detections_frame,
+                label,
+                (x1, max(0, y1 - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,  # font scale
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA
+            )
+
+            # 2) If it's a banana, track in banana_boxes
+            if class_name.lower() == "banana":
+                banana_boxes.append((x1, y1, x2, y2, conf))
+
+                # If needed, keep track of best (highest confidence) banana for center
+                if conf > best_banana_conf:
+                    best_banana_conf = conf
+                    bx_center = int((x1 + x2) / 2)
+                    by_center = int((y1 + y2) / 2)
+                    banana_center = (bx_center, by_center)
+
+        # 3) If we found any bananas, create a 'banana_frame' with ONLY banana boxes
+        if len(banana_boxes) > 0:
+            banana_frame = frame.copy()
+            for (x1, y1, x2, y2, conf) in banana_boxes:
+                # Draw rectangle for bananas only
+                cv2.rectangle(
+                    banana_frame,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 255),
+                    2
+                )
+                label = f"banana {conf:.2f}"
+                cv2.putText(
+                    banana_frame,
+                    label,
+                    (x1, max(0, y1 - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA
+                )
+
+        return all_detections_frame, banana_frame, banana_center
+
+    # ---------------------------------------------------------------------
+    # COORDINATE TRANSFORMS, ALIGNMENTS, ETC.
+    # ---------------------------------------------------------------------
+    def pixel_to_camera_frame(self, pixel_coords, depth_m):
         """
-        Compute the homography matrix given intrinsic matrix K, rotation matrix R, and translation vector t.
+        Convert pixel coordinates + depth (meters) to camera coordinates.
         """
-        K_inv = np.linalg.inv(K)
-        H = np.dot(K, np.dot(R - np.dot(t.reshape(-1, 1), K_inv[-1, :].reshape(1, -1)), K_inv))
-        return H
+        fx, fy, cx, cy = self.rgb_K  # (fx, fy, cx, cy)
+        u, v = pixel_coords
+        X = (u - cx) * depth_m / fx
+        Y = (v - cy) * depth_m / fy
+        Z = depth_m
+        return (X, Y, Z)
 
-
-    def align_depth(self, depth: np.ndarray, depth_K: Tuple[float,float,float,float], rgb: np.ndarray, rgb_K: Tuple[float,float,float,float], cam2cam_transform: np.ndarray) -> np.ndarray:
+    def camera_to_base_tf(self, camera_coords):
         """
-        align depth image to the rgb image.
-
-        :param depth: depth image
-        :param depth_K: intrinsics of the depth camera
-        :param rgb: rgb image
-        :param rgb_K: intrinsics of the rgb camera
-        :param cam2cam_transform: transformation matrix from depth to rgb camera
-        :return: aligned depth image
+        Use TF to transform from 'camera_color_optical_frame' to 'locobot/arm_base_link'.
+        Returns a 4x1 array [x, y, z, 1] in base frame, or None on error.
         """
-        
-        old_fx, old_fy, old_cx, old_cy = depth_K
-        new_fx, new_fy, new_cx, new_cy = rgb_K
-        # Constructing the old and new intrinsics matrices
-        K_old = np.array([[old_fx, 0, old_cx], [0, old_fy, old_cy], [0, 0, 1]])
-        K_new = np.array([[new_fx, 0, new_cx], [0, new_fy, new_cy], [0, 0, 1]])
+        try:
+            if self.tf_buffer.can_transform('locobot/arm_base_link',
+                                            'camera_color_optical_frame',
+                                            rclpy.time.Time()):
+                transform_camera_to_base = self.tf_buffer.lookup_transform(
+                    'locobot/arm_base_link',
+                    'camera_color_optical_frame',
+                    rclpy.time.Time())
 
-        # conver the instrinsics of the depth camera to the intrinsics of the rgb camera.
-        depth = self.convert_intrinsics(depth, K_old, K_new, new_size=(rgb.shape[1], rgb.shape[0]))
-        # warp the depth image to the rgb image with the transformation matrix from camera to camera.
-        depth = self.warp_image(depth, K_new, cam2cam_transform[:3, :3], cam2cam_transform[:3, 3])        
-        return depth
-    
+                tf_geom = transform_camera_to_base.transform
+
+                trans = np.array([tf_geom.translation.x,
+                                  tf_geom.translation.y,
+                                  tf_geom.translation.z], dtype=float)
+                rot = np.array([tf_geom.rotation.x,
+                                tf_geom.rotation.y,
+                                tf_geom.rotation.z,
+                                tf_geom.rotation.w], dtype=float)
+
+                transform_mat = self.create_transformation_matrix(rot, trans)
+                camera_coords_homogenous = np.array([[camera_coords[0]],
+                                                     [camera_coords[1]],
+                                                     [camera_coords[2]],
+                                                     [1]])
+                base_coords = transform_mat @ camera_coords_homogenous
+                return base_coords
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self.get_logger().error(f"Failed to convert camera->base transform: {str(e)}")
+            return None
+
     def create_transformation_matrix(self, quaternion: np.ndarray, translation: np.ndarray) -> np.ndarray:
-        """
-        Create a 4x4 homogeneous transformation matrix from a quaternion and translation vector.
-
-        Parameters:
-        - quaternion: np.ndarray of shape (4,) [x, y, z, w]
-        - translation: np.ndarray of shape (3,) [x, y, z]
-
-        Returns:
-        - 4x4 homogeneous transformation matrix
-        """
-        # Convert quaternion (x, y, z, w) to 3x3 rotation matrix
+        """ Create a 4x4 homogeneous transform from (x, y, z, w) quaternion and (tx, ty, tz). """
         rotation_matrix = R.from_quat(quaternion).as_matrix()
-
-        # Create 4x4 homogeneous transformation matrix
         matrix = np.eye(4)
         matrix[:3, :3] = rotation_matrix
         matrix[:3, 3] = translation
-
         return matrix
-    
-    def decompose_transformation_matrix(self, matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+
+    def align_depth(self, depth: np.ndarray,
+                    depth_K: Tuple[float,float,float,float],
+                    rgb: np.ndarray,
+                    rgb_K: Tuple[float,float,float,float],
+                    cam2cam_transform: np.ndarray) -> np.ndarray:
         """
-        Decompose a 4x4 homogeneous transformation matrix into a quaternion and translation vector.
-
-        Parameters:
-        - matrix: np.ndarray of shape (4, 4)
-
-        Returns:
-        - quaternion: np.ndarray of shape (4,) [x, y, z, w]
-        - translation: np.ndarray of shape (3,) [x, y, z]
+        Align depth image to the rgb image for consistent (u, v) indexing.
         """
-        # Extract rotation matrix and translation vector
-        rotation_matrix = matrix[:3, :3]
-        translation = matrix[:3, 3]
+        old_fx, old_fy, old_cx, old_cy = depth_K
+        new_fx, new_fy, new_cx, new_cy = rgb_K
 
-        # Convert rotation matrix to quaternion (x, y, z, w)
-        quaternion = R.from_matrix(rotation_matrix).as_quat()
+        K_old = np.array([[old_fx, 0, old_cx],
+                          [0, old_fy, old_cy],
+                          [0,     0,     1]])
+        K_new = np.array([[new_fx, 0, new_cx],
+                          [0, new_fy, new_cy],
+                          [0,     0,     1]])
 
-        return quaternion, translation
+        # Step 1: rescale depth intrinsics to match RGB resolution
+        depth_rescaled = self.convert_intrinsics(depth, K_old, K_new,
+                                                 new_size=(rgb.shape[1], rgb.shape[0]))
+
+        # Step 2: warp perspective from depth camera to RGB camera transform
+        R_ = cam2cam_transform[:3, :3]
+        t_ = cam2cam_transform[:3, 3]
+        aligned_depth = self.warp_image(depth_rescaled, K_new, R_, t_)
+
+        return aligned_depth
+
+    def convert_intrinsics(self, img, K_old, K_new, new_size=(1280, 720)):
+        """
+        Converts one image to new intrinsics by building a map of old->new coords.
+        """
+        width, height = new_size
+        K_new_inv = np.linalg.inv(K_new)
+
+        # Generate pixel grid in new image coords
+        x, y = np.meshgrid(np.arange(width), np.arange(height))
+        homogenous_coords = np.stack([
+            x.ravel(),
+            y.ravel(),
+            np.ones_like(x).ravel()
+        ], axis=-1).T
+
+        # Map from new coords -> old coords
+        old_coords = K_old @ (K_new_inv @ homogenous_coords)
+        old_coords /= old_coords[2, :]  # Normalize
+
+        map_x = old_coords[0, :].reshape(height, width).astype(np.float32)
+        map_y = old_coords[1, :].reshape(height, width).astype(np.float32)
+
+        return cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR)
+
+    def warp_image(self, image, K, R, t):
+        """
+        Warps image from camera1 to camera2 using a homography approximation.
+        For real 3D transforms, you'd do a full reprojection.
+        """
+        H = self.compute_homography(K, R, t)
+        height, width = image.shape[:2]
+        return cv2.warpPerspective(image, H, (width, height))
+
+    def compute_homography(self, K, R, t):
+        """
+        Creates a homography ignoring real depth variation. 
+        Approx: H = K * R * K^-1
+        """
+        K_inv = np.linalg.inv(K)
+        return K @ (R @ K_inv)
 
 def main(args=None):
     rclpy.init(args=args)
