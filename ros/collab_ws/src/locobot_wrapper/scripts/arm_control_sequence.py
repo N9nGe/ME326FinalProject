@@ -65,8 +65,8 @@ class ArmWrapperNode(Node):
         target_y = msg.pose.position.y
         target_z = msg.pose.position.z
 
-        hover_height = 0.2  # Height above the object for hover
-        lift_height = 0.2   # Height to lift after grasping
+        hover_height = 0.1  # Height above the object for hover
+        lift_height = 0.1  # Height to lift after grasping
 
         # Step 1: Move above the target position (hover)
         time.sleep(3.0)

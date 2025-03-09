@@ -35,14 +35,14 @@ class Camera(Node):
 
         self.subscription = self.create_subscription(
             Image,
-            '/locobot/camera/camera/color/image_raw',
+            '/locobot/camera/color/image_raw',
             self.camera_listener_callback,
             10)
         self.subscription  # prevent unused variable warning
 
         self.subscription_depth = self.create_subscription(
             Image,
-            '/locobot/camera/camera/depth/image_rect_raw',
+            '/locobot/camera/depth/image_rect_raw',
             self.depth_listener_callback,
             10)
         self.subscription_depth  # prevent unused variable warning
@@ -139,10 +139,16 @@ class Camera(Node):
             x_pix, y_pix = self.center_coordinates
             depth_at_center_mm = aligned_depth[y_pix, x_pix]
             depth_at_center_m = depth_at_center_mm / 1000.0
-            self.get_logger().info(f"Depth at banana center = {depth_at_center_m:.3f} m")
+            
+            # self.get_logger().info(f"Depth at banana center = {depth_at_center_m:.3f} m")
+            self.get_logger().info(f"Depth at banana center = {depth[y_pix, x_pix]/1000.0:.3f} m")
+
+            if np.abs(depth[y_pix, x_pix]/1000.0) <= 0.1:
+                return
 
             # Convert pixel coords + depth to camera coordinates
-            camera_coords = self.pixel_to_camera_frame(self.center_coordinates, depth_at_center_m)
+            # camera_coords = self.pixel_to_camera_frame(self.center_coordinates, depth_at_center_m)
+            camera_coords = self.pixel_to_camera_frame(self.center_coordinates, depth[y_pix, x_pix]/1000.0)
             # Transform camera coords to the robot base frame
             base_coords = self.camera_to_base_tf(camera_coords)
             self.get_logger().info(f"Banana in base frame: {base_coords}")
@@ -304,6 +310,7 @@ class Camera(Node):
                                 tf_geom.rotation.w], dtype=float)
 
                 transform_mat = self.create_transformation_matrix(rot, trans)
+                print(f"tranform_mat: {transform_mat}")
                 camera_coords_homogenous = np.array([[camera_coords[0]],
                                                      [camera_coords[1]],
                                                      [camera_coords[2]],

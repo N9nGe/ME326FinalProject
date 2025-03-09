@@ -12,4 +12,5 @@ ros/collab_ws/src/collaborative_robotics_course/locobot_autonomy/locobot_autonom
 /ros/collab_ws/yolo11l.pt
 /ros/collab_ws/yolo11s.pt
 /ros/collab_ws/yolo8n.pt
+*.pt
 
