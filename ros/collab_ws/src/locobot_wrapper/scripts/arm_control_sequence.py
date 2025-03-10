@@ -25,10 +25,21 @@ class ArmWrapperNode(Node):
 
         self.received_pose = False
 
+        self.ready = False
+
+        self.return_to_origin_pub = self.create_publisher(Bool,"ReturnOrigin",1)
+
         self.pose_subscriber = self.create_subscription(
             PoseStamped,
             '/arm_pose',  
             self.pose_callback,
+            10
+        )
+
+        self.ready_subscriber = self.create_subscription(
+            Bool,
+            '/Arm_move',  
+            self.ready_flag_callback,
             10
         )
 
@@ -57,11 +68,13 @@ class ArmWrapperNode(Node):
             robot_name='locobot',
             arm_model='mobile_wx250s'
             )
-
+    def ready_flag_callback(self, msg):
+        self.ready = msg.data
+        
     def pose_callback(self, msg):
         # Log the received PoseStamped message
 
-        if self.received_pose:
+        if self.received_pose or self.ready == False:
             return  # Ignore further messages
 
         self.received_pose = True  # Set the flag to stop updates
@@ -89,7 +102,7 @@ class ArmWrapperNode(Node):
         
 
         # Step 3: Move down to the target position
-        self.move_to_pose(target_x , target_y, target_z - 0.05 )
+        self.move_to_pose(target_x , target_y + 0.015, target_z - 0.05 )
         self.get_logger().info("Step 3: Moved to target position.")
         time.sleep(3.0)
         
@@ -104,7 +117,10 @@ class ArmWrapperNode(Node):
         self.move_to_pose(target_x - 0.3, 0, target_z + lift_height)
         self.get_logger().info("Step 5: Object lifted (hover position).")
         time.sleep(3.0)
-        
+
+        msg = Bool()
+        msg.data = True
+        self.return_to_origin_pub.publish(msg)
 
 
 

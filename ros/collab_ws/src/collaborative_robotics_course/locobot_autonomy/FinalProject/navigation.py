@@ -79,6 +79,7 @@ class LocobotExample(Node):
         self.return_to_origin_pub = self.create_publisher(Bool,"ReturnOrigin",1)
         self.target_pose_pub = self.create_publisher(Pose,"Target_pose",1)
         self.modify_audio_pub = self.create_publisher(Bool, 'ModifyAudioStatus', 10)
+        self.modify_arm_pub = self.create_publisher(Bool, 'Arm_move', 10)
 
         # use this if odometry message is reliable: 
         #using "/locobot/sim_ground_truth_pose" because "/odom" is from wheel commands in sim is unreliable
@@ -271,6 +272,7 @@ class LocobotExample(Node):
         self.mobile_base_vel_publisher.publish(control_msg)
         print("error_mag", err_magnitude)
         if err_magnitude < self.goal_reached_error:
+            arm_msg = Bool()
             if self.return_flag == True:
                 msg = Bool()
                 msg.data = False
@@ -278,6 +280,11 @@ class LocobotExample(Node):
                 self.modify_flag = True
                 self.return_to_origin_pub.publish(msg)
                 self.get_logger().info("Returning to origin")
+                arm_msg.data = False
+                self.modify_arm_pub.publish(arm_msg)
+            else:
+                arm_msg.data = True
+                self.modify_arm_pub.publish(arm_msg)
             
         if self.modify_flag == True:
             if self.target_pose.position.x == self.orgin_pose.position.x and self.target_pose.position.y == self.orgin_pose.position.y:
@@ -291,6 +298,7 @@ class LocobotExample(Node):
         self.get_logger().info(f"Received target pose: {msg}")
         self.integrated_error_list = []
         self.target_pose = msg
+        print(self.target_pose)
         
     def return_to_origin_callback(self, msg):
         self.get_logger().info(f"Received return to origin Flag: {msg}")

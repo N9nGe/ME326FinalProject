@@ -61,6 +61,22 @@ def generate_launch_description():
             parameters=[{'use_sim': LaunchConfiguration('use_sim')}],
         ),
 
+        Node(
+            package='locobot_autonomy',
+            executable='audio_processing.py',
+            name='audio_processing',
+            output='screen',
+            parameters=[{'use_sim': LaunchConfiguration('use_sim')}],
+        ),
+        
+        Node(
+            package='locobot_autonomy',
+            executable='navigation.py',
+            name='navigation',
+            output='screen',
+            parameters=[{'use_sim': LaunchConfiguration('use_sim')}],
+        ),
+
         # publishing the semantic robot description (bit of a hack)
         Node(
             package='locobot_wrapper',

@@ -58,7 +58,10 @@ class Camera(Node):
             PoseStamped,
             '/arm_pose',  # CHANGE THIS TO THE CORRECT TOPIC
             10)
-        self.publish_target  # prevent unused variable warning
+        self.publish_target
+        
+        self.target_pose_pub = self.create_publisher(Pose,"Target_pose",1)
+        self.target_pose_pub
 
         # Intrinsics for RGB and Depth cameras
         self.rgb_K = (609.03759765625, 609.2069091796875, 323.6105041503906, 243.78759765625)
@@ -149,26 +152,42 @@ class Camera(Node):
             # Convert pixel coords + depth to camera coordinates
             # camera_coords = self.pixel_to_camera_frame(self.center_coordinates, depth_at_center_m)
             camera_coords = self.pixel_to_camera_frame(self.center_coordinates, depth[y_pix, x_pix]/1000.0)
-            # Transform camera coords to the robot base frame
-            base_coords = self.camera_to_base_tf(camera_coords)
-            self.get_logger().info(f"Banana in base frame: {base_coords}")
+            # Transform camera coords to the robot arm frame
+            arm_base_coords = self.camera_to_base_tf(camera_coords, 'locobot/arm_base_link')
+            chassis_base_coords = self.camera_to_base_tf(camera_coords, 'locobot/base_link')
+            self.get_logger().info(f"Banana in arm base frame: {arm_base_coords}")
+            self.get_logger().info(f"Banana in chassis base frame: {chassis_base_coords}")
 
-            if base_coords is not None:
+            if arm_base_coords is not None:
                 # Publish as a PoseStamped
                 pose_msg = PoseStamped()
                 pose_msg.header.stamp = self.get_clock().now().to_msg()
                 pose_msg.header.frame_id = "map"  # or "locobot/arm_base_link", etc.
 
                 # base_coords is shape (4,1) => [x, y, z, 1]
-                pose_msg.pose.position.x = float(base_coords[0])
-                pose_msg.pose.position.y = float(base_coords[1])
-                pose_msg.pose.position.z = float(base_coords[2])
+                pose_msg.pose.position.x = float(arm_base_coords[0]-0.12)
+                pose_msg.pose.position.y = float(arm_base_coords[1])
+                pose_msg.pose.position.z = float(arm_base_coords[2])
                 pose_msg.pose.orientation.x = 0.0
                 pose_msg.pose.orientation.y = 0.0
                 pose_msg.pose.orientation.z = 0.0
                 pose_msg.pose.orientation.w = 1.0
 
                 self.publish_target.publish(pose_msg)
+
+            if chassis_base_coords is not None:
+                # Publish as a PoseStamped
+                pose_base = Pose()
+
+                # base_coords is shape (4,1) => [x, y, z, 1]
+                pose_base.position.x = float(chassis_base_coords[0] - 0.33)
+                pose_base.position.y = float(chassis_base_coords[1])
+                pose_base.orientation.x = 0.0
+                pose_base.orientation.y = 0.0
+                pose_base.orientation.z = 0.0
+                pose_base.orientation.w = 1.0
+
+                self.target_pose_pub.publish(pose_base)
 
         except Exception as e:
             self.get_logger().error(f"Failed to process depth image: {str(e)}")
@@ -235,7 +254,7 @@ class Camera(Node):
             )
 
             # 2) If it's a banana, track in banana_boxes
-            if class_name.lower() == "banana":
+            if class_name.lower() == self.object:
                 banana_boxes.append((x1, y1, x2, y2, conf))
 
                 # If needed, keep track of best (highest confidence) banana for center
@@ -285,13 +304,13 @@ class Camera(Node):
         Z = depth_m
         return (X, Y, Z)
 
-    def camera_to_base_tf(self, camera_coords):
+    def camera_to_base_tf(self, camera_coords, frame_name: str):
         """
         Use TF to transform from 'camera_color_optical_frame' to 'locobot/arm_base_link'.
         Returns a 4x1 array [x, y, z, 1] in base frame, or None on error.
         """
         try:
-            if self.tf_buffer.can_transform('locobot/arm_base_link',
+            if self.tf_buffer.can_transform(frame_name,
                                             'camera_color_optical_frame',
                                             rclpy.time.Time()):
                 transform_camera_to_base = self.tf_buffer.lookup_transform(
